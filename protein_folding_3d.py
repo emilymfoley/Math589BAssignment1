@@ -43,36 +43,41 @@ def bond_potential(r, b=1.0, k_b=100.0):
 # -----------------------------
 def total_energy_with_grad(x, n_beads, epsilon=1.0, sigma=1.0, b=1.0, k_b=100.0):
     positions = x.reshape((n_beads, -1))
-    n_dim = positions.shape[1]
-    energy = 0.0
+    
+    # --- Bond Potential (Vectorized) ---
+    d_vecs = np.diff(positions, axis=0)  # Pairwise differences
+    r = np.linalg.norm(d_vecs, axis=1, keepdims=True)
+    valid_bonds = r > 1e-12  # Avoid division by zero
+    energy = np.sum(k_b * (r[valid_bonds] - b) ** 2)
+    
+    dE_dr = 2 * k_b * (r - b)
+    d_grad = (dE_dr / r) * d_vecs  # (n_beads-1, 3)
+    
     grad = np.zeros_like(positions)
-    for i in range(n_beads - 1):
-        d_vec = positions[i+1] - positions[i]
-        r = np.linalg.norm(d_vec)
-        if r == 0:
-            continue
-        energy += bond_potential(r, b, k_b)
-        dE_dr = 2 * k_b * (r - b)
-        d_grad = (dE_dr / r) * d_vec
-        grad[i]   -= d_grad
-        grad[i+1] += d_grad
-    diff = positions[:, None, :] - positions[None, :, :]
-    r_mat = np.linalg.norm(diff, axis=2)
+    grad[:-1] -= d_grad
+    grad[1:]  += d_grad
+
+    # --- Lennard-Jones Potential (Vectorized) ---
+    diff = positions[:, None, :] - positions[None, :, :]  # (n_beads, n_beads, 3)
+    r_mat = np.linalg.norm(diff, axis=2)  # (n_beads, n_beads)
+    
     idx_i, idx_j = np.triu_indices(n_beads, k=1)
     r_ij = r_mat[idx_i, idx_j]
     valid = r_ij >= 1e-2
     r_valid = r_ij[valid]
-    LJ_energy = 4 * epsilon * ((sigma / r_valid)**12 - (sigma / r_valid)**6)
+    
+    LJ_energy = 4 * epsilon * ((sigma / r_valid) ** 12 - (sigma / r_valid) ** 6)
     energy += np.sum(LJ_energy)
+
     dE_dr = 4 * epsilon * (-12 * sigma**12 / r_valid**13 + 6 * sigma**6 / r_valid**7)
-    diff_ij = diff[idx_i, idx_j]
-    diff_valid = diff_ij[valid]
+    diff_valid = diff[idx_i, idx_j][valid]
     contrib = (dE_dr[:, None] / r_valid[:, None]) * diff_valid
-    valid_i = idx_i[valid]
-    valid_j = idx_j[valid]
-    np.add.at(grad, valid_i, contrib)
-    np.add.at(grad, valid_j, -contrib)
+
+    np.add.at(grad, idx_i[valid], contrib)
+    np.add.at(grad, idx_j[valid], -contrib)
+
     return energy, grad.flatten()
+
 
 # -----------------------------
 # Bespoke BFGS with Backtracking
