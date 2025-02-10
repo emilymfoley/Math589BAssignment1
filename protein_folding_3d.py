@@ -87,36 +87,39 @@ def bfgs_optimize(func, x0, args, n_beads, maxiter=1000, tol=1e-6, alpha0=1.0, b
     n = len(x)
     H = np.eye(n)
     trajectory = []
-    for k in range(maxiter):
-        f, g = func(x, *args)
-        g_norm = np.linalg.norm(g)
-        if g_norm < tol:
-            print(f"BFGS converged at iteration {k} with gradient norm {g_norm:.8e}")
-            break
-        p = -H.dot(g)
+
+    def line_search(x, f, g, p):
         alpha = alpha0
-        while True:
+        while alpha > 1e-12:
             x_new = x + alpha * p
             f_new, _ = func(x_new, *args)
             if f_new <= f + c * alpha * np.dot(g, p):
-                break
+                return alpha, x_new, f_new
             alpha *= beta
-            if alpha < 1e-12:
-                break
-        s = alpha * p
-        x_new = x + s
+        return 0, x, f  # No progress possible
+
+    for k in range(maxiter):
+        f, g = func(x, *args)
+        if np.linalg.norm(g) < tol:
+            print(f"BFGS converged at iteration {k} with gradient norm {np.linalg.norm(g):.8e}")
+            break
+
+        p = -H @ g
+        alpha, x_new, f_new = line_search(x, f, g, p)
+        s = x_new - x
         f_new, g_new = func(x_new, *args)
+
         y = g_new - g
         ys = np.dot(y, s)
         if ys > 1e-10:
             rho = 1.0 / ys
-            I = np.eye(n)
-            H = (I - rho * np.outer(s, y)).dot(H).dot(I - rho * np.outer(y, s)) + rho * np.outer(s, s)
+            V = np.eye(n) - rho * np.outer(s, y)
+            H = V @ H @ V.T + rho * np.outer(s, s)
+
         x = x_new
         trajectory.append(x.reshape((n_beads, -1)))
-        if (k+1) % 50 == 0:
-            print(f"Iteration {k+1}: f = {f_new:.6f}, ||g|| = {np.linalg.norm(g_new):.2e}")
     return x, trajectory
+
 
 # -----------------------------
 # Bespoke Optimize Protein using BFGS with Backtracking and Conditional Perturbations
@@ -171,7 +174,6 @@ def optimize_protein(positions, n_beads, write_csv=False, maxiter=10000, tol=1e-
     dummy_result.nit = len(traj) - 1
     dummy_result.success = True
     dummy_result.status = 0
-    dummy_result.message = "Optimization terminated successfully."
 
     if write_csv:
         csv_filepath = f'protein{n_beads}.csv'
